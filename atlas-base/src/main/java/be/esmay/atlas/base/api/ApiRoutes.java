@@ -7,6 +7,7 @@ import be.esmay.atlas.base.activity.ServerActivity;
 import be.esmay.atlas.base.api.dto.ActivityResponse;
 import be.esmay.atlas.base.api.dto.ApiResponse;
 import be.esmay.atlas.base.api.dto.FileListResponse;
+import be.esmay.atlas.base.api.dto.PresignedUploadToken;
 import be.esmay.atlas.base.api.dto.UploadSession;
 import be.esmay.atlas.base.config.impl.ScalerConfig;
 import be.esmay.atlas.base.files.FileManager;
@@ -26,6 +27,7 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
+import io.vertx.ext.web.handler.CorsHandler;
 
 import java.io.File;
 import java.lang.management.ManagementFactory;
@@ -46,6 +48,7 @@ public final class ApiRoutes {
     private final ApiAuthHandler authHandler;
     private final ObjectMapper objectMapper;
     private final FileManager fileManager;
+    private final PresignedTokenManager presignedTokenManager;
 
     public ApiRoutes(Router router, ApiAuthHandler authHandler) {
         this.router = router;
@@ -54,13 +57,21 @@ public final class ApiRoutes {
         this.objectMapper.registerModule(new JavaTimeModule());
         this.objectMapper.enable(SerializationFeature.INDENT_OUTPUT);
         this.fileManager = new FileManager();
+        this.presignedTokenManager = new PresignedTokenManager();
     }
 
     public void setupRoutes() {
+        this.router.route("/api/v1/*").handler(CorsHandler.create("*")
+                .allowedMethod(io.vertx.core.http.HttpMethod.GET)
+                .allowedMethod(io.vertx.core.http.HttpMethod.POST)
+                .allowedMethod(io.vertx.core.http.HttpMethod.PUT)
+                .allowedMethod(io.vertx.core.http.HttpMethod.DELETE)
+                .allowedMethod(io.vertx.core.http.HttpMethod.OPTIONS)
+                .allowedHeader("Content-Type")
+                .allowedHeader("Authorization"));
+
         this.router.post("/api/v1/servers/:id/files/upload").handler(this::uploadFileWithAuth);
-
         this.router.put("/api/v1/servers/:id/files/upload/:uploadId/chunk/:chunkNumber").handler(this::uploadChunkWithAuth);
-
         this.router.post("/api/v1/templates/files/upload").handler(this::uploadTemplateFileWithAuth);
 
         this.router.route("/api/v1/*").handler(BodyHandler.create());
@@ -79,6 +90,9 @@ public final class ApiRoutes {
         this.router.get("/api/v1/servers/:id/files/download").handler(this::downloadFile);
         this.router.post("/api/v1/servers/:id/files/upload/start").handler(this::startChunkedUpload);
         this.router.post("/api/v1/servers/:id/files/upload/:uploadId/complete").handler(this::completeChunkedUpload);
+        this.router.post("/api/v1/servers/:id/files/upload/presign").handler(this::createPresignedUploadUrl);
+        this.router.post("/api/v1/servers/:id/files/upload/start/presign").handler(this::createPresignedChunkedUploadUrl);
+        this.router.post("/api/v1/templates/files/upload/presign").handler(this::createPresignedTemplateUploadUrl);
         this.router.post("/api/v1/servers/:id/files/mkdir").handler(this::createDirectory);
         this.router.post("/api/v1/servers/:id/files/rename").handler(this::renameFile);
         this.router.post("/api/v1/servers/:id/files/zip").handler(this::zipFiles);
@@ -1167,8 +1181,31 @@ public final class ApiRoutes {
 
     private void uploadFileWithAuth(RoutingContext context) {
         String authHeader = context.request().getHeader("Authorization");
-        String token = this.authHandler.extractBearerToken(authHeader);
+        String presignedToken = context.request().getParam("token");
 
+        if (presignedToken != null && !presignedToken.isEmpty()) {
+            PresignedUploadToken uploadToken = this.presignedTokenManager.validateAndConsumeToken(presignedToken, false);
+            if (uploadToken == null) {
+                this.sendError(context, "Invalid or expired presigned token", 401);
+                return;
+            }
+
+            if (uploadToken.getUploadType() != PresignedUploadToken.UploadType.SERVER_FILE) {
+                this.sendError(context, "Invalid token type for this operation", 403);
+                return;
+            }
+
+            String serverId = context.pathParam("id");
+            if (!uploadToken.getServerId().equals(serverId)) {
+                this.sendError(context, "Token not valid for this server", 403);
+                return;
+            }
+
+            this.uploadFile(context);
+            return;
+        }
+
+        String token = this.authHandler.extractBearerToken(authHeader);
         if (!this.authHandler.isValidToken(token)) {
             this.sendError(context, "Unauthorized: Invalid or missing API key", 401);
             return;
@@ -1379,8 +1416,31 @@ public final class ApiRoutes {
 
     private void uploadChunkWithAuth(RoutingContext context) {
         String authHeader = context.request().getHeader("Authorization");
-        String token = this.authHandler.extractBearerToken(authHeader);
+        String presignedToken = context.request().getParam("token");
 
+        if (presignedToken != null && !presignedToken.isEmpty()) {
+            PresignedUploadToken uploadToken = this.presignedTokenManager.getToken(presignedToken);
+            if (uploadToken == null || !uploadToken.isValid()) {
+                this.sendError(context, "Invalid or expired presigned token", 401);
+                return;
+            }
+
+            if (uploadToken.getUploadType() != PresignedUploadToken.UploadType.SERVER_CHUNK) {
+                this.sendError(context, "Invalid token type for this operation", 403);
+                return;
+            }
+
+            String uploadId = context.pathParam("uploadId");
+            if (!uploadId.equals(uploadToken.getUploadId())) {
+                this.sendError(context, "Token not valid for this upload session", 403);
+                return;
+            }
+
+            this.uploadChunk(context);
+            return;
+        }
+
+        String token = this.authHandler.extractBearerToken(authHeader);
         if (!this.authHandler.isValidToken(token)) {
             this.sendError(context, "Unauthorized: Invalid or missing API key", 401);
             return;
@@ -1837,8 +1897,25 @@ public final class ApiRoutes {
 
     private void uploadTemplateFileWithAuth(RoutingContext context) {
         String authHeader = context.request().getHeader("Authorization");
-        String token = this.authHandler.extractBearerToken(authHeader);
+        String presignedToken = context.request().getParam("token");
 
+        if (presignedToken != null && !presignedToken.isEmpty()) {
+            PresignedUploadToken uploadToken = this.presignedTokenManager.validateAndConsumeToken(presignedToken, false);
+            if (uploadToken == null) {
+                this.sendError(context, "Invalid or expired presigned token", 401);
+                return;
+            }
+
+            if (uploadToken.getUploadType() != PresignedUploadToken.UploadType.TEMPLATE_FILE) {
+                this.sendError(context, "Invalid token type for this operation", 403);
+                return;
+            }
+
+            this.uploadTemplateFile(context);
+            return;
+        }
+
+        String token = this.authHandler.extractBearerToken(authHeader);
         if (!this.authHandler.isValidToken(token)) {
             this.sendError(context, "Unauthorized: Invalid or missing API key", 401);
             return;
@@ -2303,6 +2380,198 @@ public final class ApiRoutes {
         } catch (Exception e) {
             Logger.error("Failed to unzip template file", e);
             this.sendError(context, "Failed to unzip template file: " + e.getMessage());
+        }
+    }
+
+    private void createPresignedUploadUrl(RoutingContext context) {
+        String serverId = context.pathParam("id");
+        JsonObject body = context.body().asJsonObject();
+
+        if (body == null) {
+            this.sendError(context, "Request body is required", 400);
+            return;
+        }
+
+        String targetPath = body.getString("path");
+        Long expirationSeconds = body.getLong("expirationSeconds", 300L);
+
+        if (targetPath == null || targetPath.isEmpty()) {
+            this.sendError(context, "Path is required", 400);
+            return;
+        }
+
+        if (!this.fileManager.isValidPath(targetPath)) {
+            this.sendError(context, "Invalid file path: directory traversal not allowed", 400);
+            return;
+        }
+
+        ServiceProvider provider = AtlasBase.getInstance().getProviderManager().getProvider();
+
+        provider.getServer(serverId)
+                .thenAccept(serverOpt -> {
+                    if (serverOpt.isEmpty()) {
+                        this.sendError(context, "Server not found: " + serverId, 404);
+                        return;
+                    }
+
+                    try {
+                        PresignedUploadToken token = this.presignedTokenManager.createToken(
+                                serverId,
+                                targetPath,
+                                PresignedUploadToken.UploadType.SERVER_FILE,
+                                expirationSeconds,
+                                null
+                        );
+
+                        String uploadPath = "/api/v1/servers/" + serverId + "/files/upload?token=" + token.getToken() + "&path=" + targetPath;
+
+                        Map<String, Object> response = new HashMap<>();
+                        response.put("uploadPath", uploadPath);
+                        response.put("token", token.getToken());
+                        response.put("expiresAt", token.getExpiresAt().toString());
+                        response.put("method", "POST");
+
+                        this.sendResponse(context, ApiResponse.success(response, "Presigned upload URL created"));
+
+                    } catch (Exception e) {
+                        Logger.error("Failed to create presigned upload URL for server {}", serverId, e);
+                        this.sendError(context, "Failed to create presigned URL: " + e.getMessage());
+                    }
+                })
+                .exceptionally(throwable -> {
+                    this.sendError(context, "Failed to find server: " + throwable.getMessage());
+                    return null;
+                });
+    }
+
+    private void createPresignedChunkedUploadUrl(RoutingContext context) {
+        String serverId = context.pathParam("id");
+        JsonObject body = context.body().asJsonObject();
+
+        if (body == null) {
+            this.sendError(context, "Request body is required", 400);
+            return;
+        }
+
+        String targetPath = body.getString("path");
+        Long totalSize = body.getLong("totalSize");
+        Integer chunkSize = body.getInteger("chunkSize");
+        Long expirationSeconds = body.getLong("expirationSeconds", 1800L);
+
+        if (targetPath == null || targetPath.isEmpty()) {
+            this.sendError(context, "Path is required", 400);
+            return;
+        }
+
+        if (totalSize == null || totalSize <= 0) {
+            this.sendError(context, "totalSize is required and must be positive", 400);
+            return;
+        }
+
+        if (!this.fileManager.isValidPath(targetPath)) {
+            this.sendError(context, "Invalid file path: directory traversal not allowed", 400);
+            return;
+        }
+
+        ServiceProvider provider = AtlasBase.getInstance().getProviderManager().getProvider();
+
+        provider.getServer(serverId)
+                .thenAccept(serverOpt -> {
+                    if (serverOpt.isEmpty()) {
+                        this.sendError(context, "Server not found: " + serverId, 404);
+                        return;
+                    }
+
+                    AtlasServer server = serverOpt.get();
+                    String workingDirectory = server.getWorkingDirectory();
+
+                    if (workingDirectory == null || workingDirectory.isEmpty()) {
+                        this.sendError(context, "Server working directory not set: " + serverId, 500);
+                        return;
+                    }
+
+                    try {
+                        UploadSession session = this.fileManager.startChunkedUpload(workingDirectory, targetPath, totalSize, chunkSize);
+
+                        Map<String, String> metadata = new HashMap<>();
+                        metadata.put("uploadId", session.getUploadId());
+
+                        PresignedUploadToken token = this.presignedTokenManager.createToken(
+                                serverId,
+                                targetPath,
+                                PresignedUploadToken.UploadType.SERVER_CHUNK,
+                                expirationSeconds,
+                                metadata
+                        );
+
+                        String chunkPathTemplate = "/api/v1/servers/" + serverId + "/files/upload/" + session.getUploadId() + "/chunk/{chunkNumber}?token=" + token.getToken();
+
+                        Map<String, Object> response = new HashMap<>();
+                        response.put("uploadId", session.getUploadId());
+                        response.put("chunkPathTemplate", chunkPathTemplate);
+                        response.put("completePath", "/api/v1/servers/" + serverId + "/files/upload/" + session.getUploadId() + "/complete");
+                        response.put("token", token.getToken());
+                        response.put("chunkSize", session.getChunkSize());
+                        response.put("totalChunks", session.getTotalChunks());
+                        response.put("expiresAt", token.getExpiresAt().toString());
+                        response.put("method", "PUT");
+
+                        this.sendResponse(context, ApiResponse.success(response, "Presigned chunked upload session created"));
+
+                    } catch (Exception e) {
+                        Logger.error("Failed to create presigned chunked upload session for server {}", serverId, e);
+                        this.sendError(context, "Failed to create presigned chunked upload: " + e.getMessage());
+                    }
+                })
+                .exceptionally(throwable -> {
+                    this.sendError(context, "Failed to find server: " + throwable.getMessage());
+                    return null;
+                });
+    }
+
+    private void createPresignedTemplateUploadUrl(RoutingContext context) {
+        JsonObject body = context.body().asJsonObject();
+
+        if (body == null) {
+            this.sendError(context, "Request body is required", 400);
+            return;
+        }
+
+        String targetPath = body.getString("path");
+        Long expirationSeconds = body.getLong("expirationSeconds", 300L);
+
+        if (targetPath == null || targetPath.isEmpty()) {
+            this.sendError(context, "Path is required", 400);
+            return;
+        }
+
+        if (!this.fileManager.isValidPath(targetPath)) {
+            this.sendError(context, "Invalid file path: directory traversal not allowed", 400);
+            return;
+        }
+
+        try {
+            PresignedUploadToken token = this.presignedTokenManager.createToken(
+                    "templates",
+                    targetPath,
+                    PresignedUploadToken.UploadType.TEMPLATE_FILE,
+                    expirationSeconds,
+                    null
+            );
+
+            String uploadPath = "/api/v1/templates/files/upload?token=" + token.getToken() + "&path=" + targetPath;
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("uploadPath", uploadPath);
+            response.put("token", token.getToken());
+            response.put("expiresAt", token.getExpiresAt().toString());
+            response.put("method", "POST");
+
+            this.sendResponse(context, ApiResponse.success(response, "Presigned template upload URL created"));
+
+        } catch (Exception e) {
+            Logger.error("Failed to create presigned template upload URL", e);
+            this.sendError(context, "Failed to create presigned URL: " + e.getMessage());
         }
     }
 }
