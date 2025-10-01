@@ -2,6 +2,7 @@ package be.esmay.atlas.base.template;
 
 import be.esmay.atlas.base.config.impl.AtlasConfig;
 import be.esmay.atlas.base.utils.Logger;
+import be.esmay.atlas.base.metrics.CreationMetrics;
 
 import java.io.IOException;
 import java.nio.file.*;
@@ -15,7 +16,7 @@ import java.util.stream.Stream;
 public final class TemplateManager {
 
     private static final String TEMPLATES_DIR = "templates";
-    
+
     private final S3TemplateManager s3Manager;
     private final AtlasConfig.Templates templatesConfig;
 
@@ -45,15 +46,20 @@ public final class TemplateManager {
             return;
         }
 
+        long startTime = System.currentTimeMillis();
         Path serverPath = Paths.get(serverDirectoryPath);
-        
+
         if (isStaticServer && this.templatesConfig.isCleanPluginsBeforeTemplates()) {
             this.cleanPluginJars(serverPath);
         }
-        
+
         for (String template : templates) {
             this.applyTemplate(serverPath, template);
         }
+
+        long duration = System.currentTimeMillis() - startTime;
+        CreationMetrics.recordTemplateApplication("template_application", duration);
+        Logger.debug("Applied {} templates to {} in {}ms", templates.size(), serverDirectoryPath, duration);
     }
     
     private void cleanPluginJars(Path serverPath) {

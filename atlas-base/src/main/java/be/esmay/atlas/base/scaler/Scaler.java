@@ -8,7 +8,9 @@ import be.esmay.atlas.base.lifecycle.ServerLifecycleService;
 import be.esmay.atlas.base.provider.DeletionOptions;
 import be.esmay.atlas.base.provider.StartOptions;
 import be.esmay.atlas.base.provider.ServiceProvider;
+import be.esmay.atlas.base.provider.impl.DockerServiceProvider;
 import be.esmay.atlas.base.utils.Logger;
+import be.esmay.atlas.base.metrics.CreationMetrics;
 import be.esmay.atlas.common.enums.ScaleType;
 import be.esmay.atlas.common.enums.ServerStatus;
 import be.esmay.atlas.common.enums.ServerType;
@@ -159,9 +161,9 @@ public abstract class Scaler {
 
     public CompletableFuture<Void> upscale() {
         ServerType serverType = ServerType.valueOf(this.scalerConfig.getGroup().getServer().getType().toUpperCase());
-        String serverName = this.getNextIdentifier();
+        ServerNaming naming = this.getNextIdentifier();
         String serverId = UUID.randomUUID().toString();
-        Logger.info("Manually scaling up server: {} (ID: {}) for group: {}", serverName, serverId, this.groupName);
+        Logger.info("Manually scaling up server: {} (ID: {}) for group: {}", naming.getName(), serverId, this.groupName);
 
         ServerInfo initialServerInfo = ServerInfo.builder()
                 .status(ServerStatus.STARTING)
@@ -172,7 +174,8 @@ public abstract class Scaler {
 
         AtlasServer server = AtlasServer.builder()
                 .serverId(serverId)
-                .name(serverName)
+                .name(naming.getName())
+                .identifier(naming.getIdentifier())
                 .group(this.groupName)
                 .type(serverType)
                 .createdAt(System.currentTimeMillis())
@@ -183,7 +186,7 @@ public abstract class Scaler {
                 .build();
         
         this.addServer(server);
-        Logger.debug("Added manual server to tracking before creation: {} with STARTING status", serverName);
+        Logger.debug("Added manual server to tracking before creation: {} with STARTING status", naming.getName());
         
         CompletableFuture<AtlasServer> createFuture = this.serviceProvider.startServerCompletely(server, StartOptions.scalingUp());
 
@@ -206,7 +209,7 @@ public abstract class Scaler {
 
         return acceptFuture.exceptionally(throwable -> {
             Logger.error("Failed to create manual server: {}", serverId, throwable);
-            this.reservedNames.remove(serverName);
+            this.reservedNames.remove(naming.getName());
             this.removeServerFromTracking(serverId);
             return null;
         });
@@ -221,26 +224,30 @@ public abstract class Scaler {
             int serversBefore = this.servers.size();
             Logger.debug("Scaling up to minimum servers for group: {}. Creating {} servers to reach minimum of {}", this.groupName, serversToCreate, minServers);
 
-            List<CompletableFuture<Void>> futures = new ArrayList<>();
-            for (int i = 0; i < serversToCreate; i++) {
-                futures.add(this.createAutoScaledServer());
+            if (serversToCreate > 1 && this.serviceProvider instanceof DockerServiceProvider) {
+                return this.batchCreateAutoScaledServers(serversToCreate, serversBefore);
+            } else {
+                List<CompletableFuture<Void>> futures = new ArrayList<>();
+                for (int i = 0; i < serversToCreate; i++) {
+                    futures.add(this.createAutoScaledServer());
+                }
+
+                CompletableFuture<Void> allFuture = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+
+                return allFuture.thenRun(() -> {
+                    this.lastScaleUpTime = Instant.now();
+
+                    this.recordScalingActivity(
+                        "up",
+                        serversBefore,
+                        this.servers.size(),
+                        "scaler",
+                        "minimum_servers_enforcement",
+                        null,
+                        null
+                    );
+                });
             }
-
-            CompletableFuture<Void> allFuture = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
-
-            return allFuture.thenRun(() -> {
-                this.lastScaleUpTime = Instant.now();
-
-                this.recordScalingActivity(
-                    "up", 
-                    serversBefore, 
-                    this.servers.size(),
-                    "scaler", 
-                    "minimum_servers_enforcement",
-                    null,
-                    null
-                );
-            });
         }
 
         if (!this.canScaleUp()) {
@@ -265,11 +272,78 @@ public abstract class Scaler {
         });
     }
 
+    private CompletableFuture<Void> batchCreateAutoScaledServers(int count, int serversBefore) {
+        Logger.info("Batch creating {} auto-scaled servers for group: {}", count, this.groupName);
+
+        List<AtlasServer> serversToCreate = new ArrayList<>();
+        ServerType serverType = ServerType.valueOf(this.scalerConfig.getGroup().getServer().getType().toUpperCase());
+
+        for (int i = 0; i < count; i++) {
+            ServerNaming naming = this.getNextIdentifier();
+            String serverId = UUID.randomUUID().toString();
+
+            ServerInfo initialServerInfo = ServerInfo.builder()
+                    .status(ServerStatus.STARTING)
+                    .onlinePlayers(0)
+                    .maxPlayers(20)
+                    .onlinePlayerNames(new HashSet<>())
+                    .build();
+
+            AtlasServer server = AtlasServer.builder()
+                    .serverId(serverId)
+                    .name(naming.getName())
+                    .identifier(naming.getIdentifier())
+                    .group(this.groupName)
+                    .type(serverType)
+                    .createdAt(System.currentTimeMillis())
+                    .isManuallyScaled(false)
+                    .shutdown(false)
+                    .lastHeartbeat(System.currentTimeMillis())
+                    .serverInfo(initialServerInfo)
+                    .build();
+
+            this.addServer(server);
+            serversToCreate.add(server);
+            Logger.debug("Prepared server for batch creation: {} with STARTING status", naming.getName());
+        }
+
+        DockerServiceProvider dockerProvider = (DockerServiceProvider) this.serviceProvider;
+        CompletableFuture<List<AtlasServer>> batchFuture = dockerProvider.createServers(this.scalerConfig.getGroup(), serversToCreate);
+
+        return batchFuture.thenAccept(createdServers -> {
+            for (AtlasServer startedServer : createdServers) {
+                this.servers.put(startedServer.getServerId(), startedServer);
+                Logger.debug("Batch: Updated server after successful start: {}", startedServer.getName());
+            }
+
+            this.lastScaleUpTime = Instant.now();
+
+            this.recordScalingActivity(
+                "up",
+                serversBefore,
+                this.servers.size(),
+                "scaler",
+                "minimum_servers_enforcement_batch",
+                null,
+                null
+            );
+
+            Logger.info("Batch creation completed: {} servers successfully started for group {}", createdServers.size(), this.groupName);
+        }).exceptionally(throwable -> {
+            Logger.error("Batch creation failed for group: {}", this.groupName, throwable);
+            for (AtlasServer server : serversToCreate) {
+                this.reservedNames.remove(server.getName());
+                this.removeServerFromTracking(server.getServerId());
+            }
+            return null;
+        });
+    }
+
     private CompletableFuture<Void> createAutoScaledServer() {
         ServerType serverType = ServerType.valueOf(this.scalerConfig.getGroup().getServer().getType().toUpperCase());
-        String serverName = this.getNextIdentifier();
+        ServerNaming naming = this.getNextIdentifier();
         String serverId = UUID.randomUUID().toString();
-        Logger.debug("Creating auto-scaled server: {} (ID: {}) for group: {}", serverName, serverId, this.groupName);
+        Logger.debug("Creating auto-scaled server: {} (ID: {}) for group: {}", naming.getName(), serverId, this.groupName);
 
         ServerInfo initialServerInfo = ServerInfo.builder()
                 .status(ServerStatus.STARTING)
@@ -280,7 +354,8 @@ public abstract class Scaler {
 
         AtlasServer server = AtlasServer.builder()
                 .serverId(serverId)
-                .name(serverName)
+                .name(naming.getName())
+                .identifier(naming.getIdentifier())
                 .group(this.groupName)
                 .type(serverType)
                 .createdAt(System.currentTimeMillis())
@@ -289,9 +364,9 @@ public abstract class Scaler {
                 .lastHeartbeat(System.currentTimeMillis())
                 .serverInfo(initialServerInfo)
                 .build();
-        
+
         this.addServer(server);
-        Logger.debug("Added server to tracking before creation: {} with STARTING status", serverName);
+        Logger.debug("Added server to tracking before creation: {} with STARTING status", naming.getName());
         
         CompletableFuture<AtlasServer> createFuture = this.serviceProvider.startServerCompletely(server, StartOptions.scalingUp());
 
@@ -302,7 +377,7 @@ public abstract class Scaler {
 
         return acceptFuture.exceptionally(throwable -> {
             Logger.error("Failed to create auto-scaled server: {}", serverId, throwable);
-            this.reservedNames.remove(serverName);
+            this.reservedNames.remove(naming.getName());
             this.removeServerFromTracking(serverId);
             return null;
         });
@@ -399,7 +474,7 @@ public abstract class Scaler {
         this.servers.clear();
     }
 
-    public synchronized String getNextIdentifier() {
+    public synchronized ServerNaming getNextIdentifier() {
         String pattern = this.scalerConfig.getGroup().getServer().getNaming().getNamePattern();
 
         if (pattern == null || pattern.isEmpty()) {
@@ -407,14 +482,17 @@ public abstract class Scaler {
             Logger.warn("No naming pattern configured for group {}, using default: {}", this.groupName, pattern);
         }
 
+        String identifier;
         if (this.isUuidIdentifier()) {
-            return pattern.replace("{id}", UUID.randomUUID().toString().substring(0, 8));
+            identifier = UUID.randomUUID().toString().substring(0, 8);
+        } else {
+            int nextNumber = this.getLowestAvailableNumber();
+            identifier = String.valueOf(nextNumber);
         }
 
-        int nextNumber = this.getLowestAvailableNumber();
-        String serverName = pattern.replace("{id}", String.valueOf(nextNumber));
+        String serverName = pattern.replace("{id}", identifier);
         this.reservedNames.add(serverName);
-        return serverName;
+        return new ServerNaming(serverName, identifier);
     }
 
     public void removeManualServer(String serverId) {

@@ -15,6 +15,8 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -27,6 +29,7 @@ public final class ScalerManager {
 
     private ScheduledExecutorService scheduledExecutor;
     private ScheduledFuture<?> scalingTask;
+    private ForkJoinPool parallelScalingPool;
 
     private volatile boolean isShuttingDown = false;
 
@@ -100,7 +103,10 @@ public final class ScalerManager {
             return thread;
         });
 
-        Logger.info("Starting scaling task with interval: {} seconds", checkInterval);
+        int poolSize = Math.min(Runtime.getRuntime().availableProcessors(), Math.max(1, this.scalers.size()));
+        this.parallelScalingPool = new ForkJoinPool(poolSize);
+
+        Logger.info("Starting scaling task with interval: {} seconds, parallel pool size: {}", checkInterval, poolSize);
 
         this.scalingTask = this.scheduledExecutor.scheduleWithFixedDelay(
                 this::performScalingCheck,
@@ -116,27 +122,61 @@ public final class ScalerManager {
         }
 
         try {
-            Logger.debug("Performing scaling check for {} scalers", this.scalers.size());
+            Logger.debug("Performing parallel scaling check for {} scalers", this.scalers.size());
+            long startTime = System.currentTimeMillis();
 
-            List<Scaler> sortedScalers = this.scalers.stream()
-                    .sorted(Comparator.comparing((Scaler scaler) -> !(scaler instanceof ProxyScaler))
-                            .thenComparingInt(scaler -> scaler.getScalerConfig().getGroup().getPriority()))
+            List<Scaler> proxyScalers = this.scalers.stream()
+                    .filter(scaler -> scaler instanceof ProxyScaler)
+                    .sorted(Comparator.comparingInt(scaler -> scaler.getScalerConfig().getGroup().getPriority()))
                     .toList();
 
-            for (Scaler scaler : sortedScalers) {
+            for (Scaler proxyScaler : proxyScalers) {
                 if (this.isShuttingDown) {
                     break;
                 }
-
                 try {
-                    Logger.debug(scaler.getScalingStatus());
-                    scaler.scaleServers();
+                    Logger.debug(proxyScaler.getScalingStatus());
+                    proxyScaler.scaleServers();
                 } catch (Exception e) {
-                    Logger.error("Error during scaling check for group: {}", scaler.getGroupName(), e);
+                    Logger.error("Error during scaling check for proxy group: {}", proxyScaler.getGroupName(), e);
                 }
             }
+
+            List<Scaler> regularScalers = this.scalers.stream()
+                    .filter(scaler -> !(scaler instanceof ProxyScaler))
+                    .sorted(Comparator.comparingInt(scaler -> scaler.getScalerConfig().getGroup().getPriority()))
+                    .toList();
+
+            if (!regularScalers.isEmpty() && !this.isShuttingDown) {
+                List<CompletableFuture<Void>> scalingFutures = regularScalers.stream()
+                    .map(scaler -> CompletableFuture.runAsync(() -> {
+                        if (!this.isShuttingDown) {
+                            try {
+                                Logger.debug(scaler.getScalingStatus());
+                                scaler.scaleServers();
+                            } catch (Exception e) {
+                                Logger.error("Error during parallel scaling check for group: {}", scaler.getGroupName(), e);
+                            }
+                        }
+                    }, this.parallelScalingPool))
+                    .toList();
+
+                CompletableFuture.allOf(scalingFutures.toArray(new CompletableFuture[0]))
+                    .exceptionally(throwable -> {
+                        Logger.error("Error in parallel scaling execution", throwable);
+                        return null;
+                    })
+                    .join();
+            }
+
+            long elapsed = System.currentTimeMillis() - startTime;
+            if (elapsed > 5000) {
+                Logger.warn("Scaling check took {} ms for {} scalers", elapsed, this.scalers.size());
+            } else {
+                Logger.debug("Scaling check completed in {} ms for {} scalers", elapsed, this.scalers.size());
+            }
         } catch (Exception e) {
-            Logger.error("Unexpected error during scaling check", e);
+            Logger.error("Unexpected error during parallel scaling check", e);
         }
     }
 
@@ -185,6 +225,17 @@ public final class ScalerManager {
 
         if (this.scalingTask != null) {
             this.scalingTask.cancel(false);
+        }
+
+        if (this.parallelScalingPool != null) {
+            this.parallelScalingPool.shutdown();
+            try {
+                if (!this.parallelScalingPool.awaitTermination(5, TimeUnit.SECONDS)) {
+                    this.parallelScalingPool.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                this.parallelScalingPool.shutdownNow();
+            }
         }
 
         if (this.scheduledExecutor != null) {

@@ -16,6 +16,7 @@ public final class AtlasServer {
 
     private String serverId;
     private String name;
+    private String identifier;
     private String group;
     private String workingDirectory;
 
