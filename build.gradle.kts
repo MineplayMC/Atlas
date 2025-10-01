@@ -18,6 +18,7 @@ allprojects {
 subprojects {
     apply(plugin = "java")
     apply(plugin = "com.github.johnrengelman.shadow")
+    apply(plugin = "maven-publish")
 
     dependencies {
         compileOnly("org.projectlombok:lombok:1.18.38")
