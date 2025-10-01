@@ -27,6 +27,18 @@ subprojects {
 
     }
 
+    configure<PublishingExtension> {
+        publications {
+            create<MavenPublication>("maven") {
+                groupId = project.group.toString()
+                artifactId = project.name
+                version = project.version.toString()
+
+                from(components["java"])
+            }
+        }
+    }
+
     tasks.withType<JavaCompile> {
         sourceCompatibility = "21"
         targetCompatibility = "21"
