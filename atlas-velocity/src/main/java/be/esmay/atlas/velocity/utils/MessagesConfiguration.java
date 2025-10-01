@@ -12,6 +12,8 @@ public final class MessagesConfiguration extends ConfigurateConfig {
 
     private final String version;
     private final String noServerFound;
+    private final String noTargetServerFound;
+    private final String targetServerOffline;
 
     private final List<String> kickedMessage;
 
@@ -40,6 +42,8 @@ public final class MessagesConfiguration extends ConfigurateConfig {
         this.version = this.rootNode.node("_version").getString("1");
 
         this.noServerFound = this.rootNode.node("messages", "gate", "join", "no_server_found").getString("<dark_red>Could not find a lobby server due to high traffic! Please try again later.");
+        this.noTargetServerFound = this.rootNode.node("messages", "gate", "join", "no_target_server_found").getString("<dark_red>Could not find a server to connect you to!");
+        this.targetServerOffline = this.rootNode.node("messages", "gate", "join", "target_server_offline").getString("<dark_red>The server you logged of from is currently offline.");
         this.kickedMessage = this.rootNode.node("messages", "gate", "kicked", "message").getList(String.class, List.of(
                 "<dark_red>You have been kicked from %1:",
                 "<dark_red>%2"

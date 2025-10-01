@@ -1,6 +1,7 @@
 package be.esmay.atlas.spigot;
 
 import be.esmay.atlas.spigot.api.AtlasSpigotAPI;
+import be.esmay.atlas.spigot.api.GateSpigotAPI;
 import be.esmay.atlas.spigot.cache.NetworkServerCacheManager;
 import be.esmay.atlas.spigot.listeners.SpigotPlayerEventListener;
 import be.esmay.atlas.spigot.network.AtlasNetworkClient;
@@ -70,6 +71,7 @@ public final class AtlasSpigotPlugin extends JavaPlugin {
         this.getServer().getPluginManager().registerEvents(this.playerEventListener, this);
         
         AtlasSpigotAPI.initialize(this.cacheManager, this.serverInfoManager, this.networkClient);
+        GateSpigotAPI.initialize(this.networkClient, this);
         this.networkClient.connect().thenRun(() -> this.getLogger().info("Successfully connected to Atlas base")).exceptionally(throwable -> {
             this.getLogger().severe("Failed to connect to Atlas base");
             return null;
@@ -87,6 +89,7 @@ public final class AtlasSpigotPlugin extends JavaPlugin {
         }
         
         AtlasSpigotAPI.shutdown();
+        GateSpigotAPI.shutdown();
         
         this.getLogger().info("Atlas Spigot plugin shut down successfully");
     }

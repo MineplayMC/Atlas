@@ -1,5 +1,6 @@
 package be.esmay.atlas.common.network.packet;
 
+import be.esmay.atlas.common.gate.packets.GateConnectPlayerPacket;
 import be.esmay.atlas.common.network.packet.packets.AtlasServerUpdatePacket;
 import be.esmay.atlas.common.network.packet.packets.AuthenticationPacket;
 import be.esmay.atlas.common.network.packet.packets.HandshakePacket;
@@ -41,5 +42,7 @@ public interface PacketHandler {
     void handleServerControl(ServerControlPacket packet);
     
     void handleMetadataUpdate(MetadataUpdatePacket packet);
+
+    void handleGatePlayerConnect(GateConnectPlayerPacket packet);
     
 }

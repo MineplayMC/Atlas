@@ -1,5 +1,6 @@
 package be.esmay.atlas.minestom.network;
 
+import be.esmay.atlas.common.gate.packets.GateConnectPlayerPacket;
 import be.esmay.atlas.common.network.packet.Packet;
 import be.esmay.atlas.common.network.packet.PacketHandler;
 import be.esmay.atlas.common.network.packet.packets.AtlasServerUpdatePacket;
@@ -114,6 +115,10 @@ public final class MinestomPacketHandler extends SimpleChannelInboundHandler<Pac
     }
 
     @Override
+    public void handleGatePlayerConnect(GateConnectPlayerPacket packet) {
+    }
+
+    @Override
     public void handleServerCommand(ServerCommandPacket packet) {
         try {
             CommandResult result = MinecraftServer.getCommandManager().execute(MinecraftServer.getCommandManager().getConsoleSender(), packet.getCommand());
@@ -142,4 +147,5 @@ public final class MinestomPacketHandler extends SimpleChannelInboundHandler<Pac
             this.cacheManager.updateAtlasServer(server);
         });
     }
+
 }

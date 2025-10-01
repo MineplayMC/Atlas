@@ -1,6 +1,7 @@
 package be.esmay.atlas.velocity.modules.scaling.network;
 
 import be.esmay.atlas.common.enums.ServerStatus;
+import be.esmay.atlas.common.gate.packets.GateConnectPlayerPacket;
 import be.esmay.atlas.common.models.AtlasServer;
 import be.esmay.atlas.common.network.packet.Packet;
 import be.esmay.atlas.common.network.packet.PacketHandler;
@@ -18,6 +19,7 @@ import be.esmay.atlas.common.network.packet.packets.ServerListRequestPacket;
 import be.esmay.atlas.common.network.packet.packets.ServerRemovePacket;
 import be.esmay.atlas.common.network.packet.packets.ServerUpdatePacket;
 import be.esmay.atlas.velocity.AtlasVelocityPlugin;
+import be.esmay.atlas.velocity.modules.gate.api.GateVelocityAPI;
 import be.esmay.atlas.velocity.modules.scaling.cache.NetworkServerCacheManager;
 import be.esmay.atlas.velocity.modules.scaling.registry.VelocityServerRegistryManager;
 import be.esmay.atlas.velocity.utils.ChatUtils;
@@ -190,11 +192,19 @@ public final class VelocityPacketHandler extends SimpleChannelInboundHandler<Pac
     @Override
     public void handleMetadataUpdate(MetadataUpdatePacket packet) {
         this.logger.debug("Metadata update received for server: {}", packet.getServerId());
-        
+
         AtlasServer server = this.cacheManager.getServer(packet.getServerId()).orElse(null);
         if (server != null) {
             server.setMetadata(packet.getMetadata());
             this.cacheManager.updateAtlasServer(server);
         }
+    }
+
+    @Override
+    public void handleGatePlayerConnect(GateConnectPlayerPacket packet) {
+        Player player = AtlasVelocityPlugin.getInstance().getProxyServer().getPlayer(packet.getUniqueId()).orElse(null);
+        if (player == null) return;
+
+        GateVelocityAPI.connect(player, packet.getConnectionType(), packet.getServer());
     }
 }

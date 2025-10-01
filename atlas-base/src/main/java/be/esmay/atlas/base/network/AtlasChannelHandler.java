@@ -6,8 +6,10 @@ import be.esmay.atlas.base.network.connection.ConnectionManager;
 import be.esmay.atlas.base.network.security.AuthenticationHandler;
 import be.esmay.atlas.base.provider.ServiceProvider;
 import be.esmay.atlas.base.scaler.Scaler;
+import be.esmay.atlas.base.scaler.impl.ProxyScaler;
 import be.esmay.atlas.base.utils.Logger;
 import be.esmay.atlas.common.enums.ServerStatus;
+import be.esmay.atlas.common.gate.packets.GateConnectPlayerPacket;
 import be.esmay.atlas.common.models.AtlasServer;
 import be.esmay.atlas.common.models.ServerInfo;
 import be.esmay.atlas.common.network.packet.Packet;
@@ -313,7 +315,7 @@ public final class AtlasChannelHandler extends SimpleChannelInboundHandler<Packe
     @Override
     public void handleMetadataUpdate(MetadataUpdatePacket packet) {
         Logger.debug("Metadata update received for server: {}", packet.getServerId());
-        
+
         if (this.currentContext == null) {
             Logger.warn("Metadata update received but no current context available");
             return;
@@ -324,25 +326,59 @@ public final class AtlasChannelHandler extends SimpleChannelInboundHandler<Packe
             Logger.warn("Metadata update from unauthenticated connection");
             return;
         }
-        
+
         AtlasBase atlasInstance = AtlasBase.getInstance();
         if (atlasInstance == null || atlasInstance.getScalerManager() == null) {
             Logger.error("Atlas instance or ScalerManager is not available");
             return;
         }
-        
+
         for (Scaler scaler : atlasInstance.getScalerManager().getScalers()) {
             AtlasServer server = scaler.getServers().stream()
                     .filter(s -> s.getServerId().equals(packet.getServerId()))
                     .findFirst()
                     .orElse(null);
-                    
+
             if (server != null) {
                 server.setMetadata(packet.getMetadata());
                 Logger.debug("Updated metadata for server: {}", server.getName());
                 break;
             }
         }
+    }
+
+    @Override
+    public void handleGatePlayerConnect(GateConnectPlayerPacket packet) {
+        Logger.debug("Gate player connect received for player {} to server {}", packet.getUniqueId(), packet.getServer());
+
+        if (this.currentContext == null) {
+            Logger.warn("Gate player connect received but no current context available");
+            return;
+        }
+
+        Connection connection = this.connectionManager.getConnection(this.currentContext.channel());
+        if (connection == null || !connection.isAuthenticated()) {
+            Logger.warn("Gate player connect from unauthenticated connection");
+            return;
+        }
+
+        AtlasBase atlasInstance = AtlasBase.getInstance();
+        if (atlasInstance == null || atlasInstance.getScalerManager() == null) {
+            Logger.error("Atlas instance or ScalerManager is not available");
+            return;
+        }
+
+        List<AtlasServer> proxyServers = atlasInstance.getScalerManager().getScalers().stream()
+                .filter(scaler -> scaler instanceof ProxyScaler)
+                .flatMap(scaler -> scaler.getServers().stream())
+                .filter(server -> server.getServerInfo() != null && server.getServerInfo().getStatus() == ServerStatus.RUNNING)
+                .toList();
+
+        for (AtlasServer proxyServer : proxyServers) {
+            this.connectionManager.sendToServer(proxyServer.getServerId(), packet);
+        }
+
+        Logger.debug("Forwarded GateConnectPlayerPacket to {} proxy servers", proxyServers.size());
     }
 
 }

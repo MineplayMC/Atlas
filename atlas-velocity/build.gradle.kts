@@ -12,6 +12,10 @@ dependencies {
     compileOnly("com.velocitypowered:velocity-api:3.3.0-SNAPSHOT")
     annotationProcessor("com.velocitypowered:velocity-api:3.3.0-SNAPSHOT")
 
+    implementation("com.zaxxer:HikariCP:5.1.0")
+    implementation("org.mariadb.jdbc:mariadb-java-client:3.3.2")
+    implementation("com.github.Jazzkuh:storm:34f9f28684")
+
     compileOnly("io.netty:netty-all:4.1.100.Final")
 }
 

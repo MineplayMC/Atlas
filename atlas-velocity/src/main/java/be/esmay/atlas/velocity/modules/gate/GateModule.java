@@ -3,7 +3,10 @@ package be.esmay.atlas.velocity.modules.gate;
 import be.esmay.atlas.common.enums.ServerStatus;
 import be.esmay.atlas.common.models.AtlasServer;
 import be.esmay.atlas.velocity.AtlasVelocityPlugin;
+import be.esmay.atlas.velocity.modules.data.DataModule;
 import be.esmay.atlas.velocity.modules.gate.commands.LobbyCommand;
+import be.esmay.atlas.velocity.modules.gate.connection.lastconnect.LastConnectManager;
+import be.esmay.atlas.velocity.modules.gate.listeners.LastConnectListener;
 import be.esmay.atlas.velocity.modules.gate.listeners.PlayerChooseServerListener;
 import be.esmay.atlas.velocity.modules.gate.listeners.PlayerKickedFromServerListener;
 import be.esmay.atlas.velocity.modules.scaling.ScalingModule;
@@ -12,17 +15,33 @@ import com.jazzkuh.modulemanager.velocity.VelocityModule;
 import com.jazzkuh.modulemanager.velocity.VelocityModuleManager;
 import com.velocitypowered.api.command.CommandManager;
 import com.velocitypowered.api.command.CommandMeta;
+import lombok.Getter;
 
 import java.util.List;
 
 public final class GateModule extends VelocityModule<AtlasVelocityPlugin> {
 
-    public GateModule(VelocityModuleManager<AtlasVelocityPlugin> owningManager, ScalingModule scalingModule) {
+    @Getter
+    private LastConnectManager lastConnectManager;
+
+    private DataModule dataModule;
+
+    public GateModule(VelocityModuleManager<AtlasVelocityPlugin> owningManager, ScalingModule scalingModule, DataModule dataModule) {
         super(owningManager);
     }
 
     @Override
+    public void onLoad() {
+        this.dataModule = this.getOwningManager().get(DataModule.class);
+    }
+
+    @Override
     public void onEnable() {
+        if (this.getPlugin().getDefaultConfiguration().isGateEnabled()) {
+            this.lastConnectManager = new LastConnectManager(this, this.dataModule);
+            this.registerComponent(new LastConnectListener(this, this.dataModule));
+        }
+
         this.registerComponent(new PlayerChooseServerListener(this));
         this.registerComponent(new PlayerKickedFromServerListener(this));
 
@@ -39,7 +58,7 @@ public final class GateModule extends VelocityModule<AtlasVelocityPlugin> {
         return this.getNextServerInGroup(group, null);
     }
 
-        public AtlasServer getNextServerInGroup(String group, String excludedServerName) {
+    public AtlasServer getNextServerInGroup(String group, String excludedServerName) {
         List<AtlasServer> runningServers = AtlasVelocityAPI.getServersByGroup(group)
                 .stream()
                 .filter(server -> server.getServerInfo() != null && server.getServerInfo().getStatus() == ServerStatus.RUNNING)
