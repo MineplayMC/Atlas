@@ -27,6 +27,8 @@ group:
     - "global/server"
     - "lobby/default"
 
+  shuffled-templates: []
+
   service-provider:
     docker:
       image: "openjdk:21-jre-slim"

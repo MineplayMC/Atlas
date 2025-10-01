@@ -57,6 +57,9 @@ public final class ScalerConfig extends ConfigurateConfig {
 
         private List<String> templates;
 
+        @Setting("shuffled-templates")
+        private List<String> shuffledTemplates;
+
         @Setting("service-provider")
         private ServiceProvider serviceProvider;
 
