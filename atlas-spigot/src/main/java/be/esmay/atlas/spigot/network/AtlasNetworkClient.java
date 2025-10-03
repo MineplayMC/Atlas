@@ -8,6 +8,7 @@ import be.esmay.atlas.common.network.packet.packets.HeartbeatPacket;
 import be.esmay.atlas.common.network.packet.packets.ServerControlPacket;
 import be.esmay.atlas.common.network.packet.packets.ServerInfoUpdatePacket;
 import be.esmay.atlas.common.network.packet.packets.ServerListRequestPacket;
+import be.esmay.atlas.common.utils.Concurrency;
 import be.esmay.atlas.spigot.cache.NetworkServerCacheManager;
 import be.esmay.atlas.spigot.server.SpigotServerInfoManager;
 import io.netty.bootstrap.Bootstrap;
@@ -150,7 +151,7 @@ public final class AtlasNetworkClient {
         if (this.channel == null || !this.channel.isActive())
             return;
 
-        this.channel.writeAndFlush(packet);
+        Concurrency.async().execute(() -> this.channel.writeAndFlush(packet));
     }
 
     public void sendServerInfoUpdate() {
