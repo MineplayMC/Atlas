@@ -19,7 +19,7 @@ public final class ResourceMetricsManager {
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
 
     public void start() {
-        this.scheduler.scheduleAtFixedRate(this::updateMetrics, 0, 5, TimeUnit.SECONDS);
+        this.scheduler.scheduleAtFixedRate(this::updateMetrics, 0, 1, TimeUnit.SECONDS);
     }
 
     public void stop() {
