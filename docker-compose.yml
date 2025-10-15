@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  atlas:
+    image: ghcr.io/mineplaymc/atlas/atlas:latest
+    container_name: atlas-server
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    ports:
+      - "9090:9090"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /root/atlas/atlas.yml:/root/atlas/atlas.yml
+      - /root/atlas/groups:/root/atlas/groups
+      - /root/atlas/servers:/root/atlas/servers
+      - /root/atlas/templates:/root/atlas/templates
+      - /root/atlas/data:/root/atlas/data
+      - /root/atlas/cache:/root/atlas/cache
+      - /root/atlas/logs:/root/atlas/logs
+    networks:
+      - atlas
+
+networks:
+  atlas:
+    name: atlas
