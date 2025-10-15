@@ -20,7 +20,10 @@ services:
       - /root/atlas/cache:/root/atlas/cache
       - /root/atlas/logs:/root/atlas/logs
     networks:
-      - atlas
+      atlas:
+        aliases:
+          - atlas-server
+
 
 networks:
   atlas:
