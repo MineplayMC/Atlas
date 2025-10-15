@@ -531,7 +531,7 @@ public final class WebSocketManager {
     }
 
     private void startStatsCollection() {
-        this.vertx.setPeriodic(5000, timerId -> this.collectAndBroadcastStats());
+        this.vertx.setPeriodic(1000, timerId -> this.collectAndBroadcastStats());
     }
 
     private void collectAndBroadcastStats() {
