@@ -1,5 +1,6 @@
 package be.esmay.atlas.common.network.packet;
 
+import be.esmay.atlas.common.gate.packets.GateConnectPlayerPacket;
 import be.esmay.atlas.common.network.packet.packets.AtlasServerUpdatePacket;
 import be.esmay.atlas.common.network.packet.packets.AuthenticationPacket;
 import be.esmay.atlas.common.network.packet.packets.HandshakePacket;
@@ -37,6 +38,7 @@ public final class PacketRegistry {
         registerPacket(0x22, MetadataUpdatePacket.class, MetadataUpdatePacket::new);
         registerPacket(0x30, ServerCommandPacket.class, ServerCommandPacket::new);
         registerPacket(0x31, ServerControlPacket.class, ServerControlPacket::new);
+        registerPacket(0x41, GateConnectPlayerPacket.class, GateConnectPlayerPacket::new);
     }
     
     private static <T extends Packet> void registerPacket(int id, Class<T> clazz, Supplier<T> supplier) {

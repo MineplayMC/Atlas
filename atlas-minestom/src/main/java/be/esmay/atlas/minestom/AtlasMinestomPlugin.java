@@ -1,6 +1,7 @@
 package be.esmay.atlas.minestom;
 
 import be.esmay.atlas.minestom.api.AtlasMinestomAPI;
+import be.esmay.atlas.minestom.api.GateMinestomAPI;
 import be.esmay.atlas.minestom.cache.NetworkServerCacheManager;
 import be.esmay.atlas.minestom.listeners.MinestomPlayerEventListener;
 import be.esmay.atlas.minestom.network.AtlasNetworkClient;
@@ -73,6 +74,7 @@ public final class AtlasMinestomPlugin extends Plugin<MinecraftServer> {
         new MinestomPlayerEventListener(this.networkClient);
         
         AtlasMinestomAPI.initialize(this.cacheManager, this.serverInfoManager, this.networkClient, this);
+        GateMinestomAPI.initialize(this.networkClient, this);
         this.networkClient.connect().thenRun(() -> this.getLogger().info("Successfully connected to Atlas base")).exceptionally(throwable -> {
             this.getLogger().error("Failed to connect to Atlas base");
             return null;
@@ -90,6 +92,7 @@ public final class AtlasMinestomPlugin extends Plugin<MinecraftServer> {
         }
         
         AtlasMinestomAPI.shutdown();
+        GateMinestomAPI.shutdown();
         
         this.getLogger().info("Atlas Spigot plugin shut down successfully");
     }

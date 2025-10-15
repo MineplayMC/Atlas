@@ -6,6 +6,7 @@ import be.esmay.atlas.base.config.impl.ScalerConfig;
 import be.esmay.atlas.base.directory.DirectoryManager;
 import be.esmay.atlas.base.lifecycle.ServerLifecycleManager;
 import be.esmay.atlas.base.lifecycle.ServerLifecycleService;
+import be.esmay.atlas.base.metrics.CreationMetrics;
 import be.esmay.atlas.base.provider.DeletionOptions;
 import be.esmay.atlas.base.provider.DeletionReason;
 import be.esmay.atlas.base.provider.ServiceProvider;
@@ -67,6 +68,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
@@ -80,6 +83,7 @@ public final class DockerServiceProvider extends ServiceProvider {
     private final Map<String, Map<String, Consumer<String>>> logSubscribers;
     private final Map<String, NetworkStatsCache> networkStatsCache;
     private final ExecutorService executorService;
+    private final ForkJoinPool batchCreationPool;
     private final Set<String> manuallyStoppedStaticServers;
 
     private final Set<Integer> usedProxyPorts;
@@ -107,6 +111,7 @@ public final class DockerServiceProvider extends ServiceProvider {
             thread.setDaemon(true);
             return thread;
         });
+        this.batchCreationPool = new ForkJoinPool(Math.min(Runtime.getRuntime().availableProcessors() * 2, 16));
         this.manuallyStoppedStaticServers = ConcurrentHashMap.newKeySet();
 
         DefaultDockerClientConfig.Builder configBuilder = DefaultDockerClientConfig.createDefaultConfigBuilder();
@@ -188,6 +193,8 @@ public final class DockerServiceProvider extends ServiceProvider {
     @Override
     public CompletableFuture<AtlasServer> createServer(ScalerConfig.Group groupConfig, AtlasServer atlasServer) {
         return CompletableFuture.supplyAsync(() -> {
+            long startTime = System.currentTimeMillis();
+            boolean success = false;
             try {
                 String containerId = this.getOrCreateDockerContainer(groupConfig, atlasServer);
                 if (containerId == null) {
@@ -221,6 +228,7 @@ public final class DockerServiceProvider extends ServiceProvider {
                 AtlasServer updatedServer = AtlasServer.builder()
                         .serverId(atlasServer.getServerId())
                         .name(atlasServer.getName())
+                        .identifier(atlasServer.getIdentifier())
                         .group(atlasServer.getGroup())
                         .workingDirectory(atlasServer.getWorkingDirectory())
                         .address(ipAddress)
@@ -233,16 +241,109 @@ public final class DockerServiceProvider extends ServiceProvider {
                         .serverInfo(serverInfo)
                         .build();
 
+                success = true;
                 Logger.debug("Container created and started: {}", atlasServer.getName());
 
                 return updatedServer;
             } catch (Exception e) {
                 Logger.error("Failed to create Docker server: {}", e.getMessage());
                 throw new RuntimeException(e);
+            } finally {
+                long duration = System.currentTimeMillis() - startTime;
+                CreationMetrics.recordServerCreation("single_server_creation", duration, success);
             }
         }, this.executorService);
     }
 
+    /**
+     * Creates multiple servers in parallel using work-stealing thread pool.
+     * This method is optimized for batch creation scenarios like auto-scaling.
+     */
+    public CompletableFuture<List<AtlasServer>> createServers(ScalerConfig.Group groupConfig, List<AtlasServer> servers) {
+        if (servers.isEmpty()) {
+            return CompletableFuture.completedFuture(new ArrayList<>());
+        }
+
+        Logger.info("Starting batch creation of {} servers for group: {}", servers.size(), groupConfig.getDisplayName());
+        long startTime = System.currentTimeMillis();
+
+        List<CompletableFuture<AtlasServer>> creationFutures = servers.stream()
+                .map(server -> CompletableFuture.supplyAsync(() -> {
+                    try {
+                        long serverStartTime = System.currentTimeMillis();
+                        String containerId = this.getOrCreateDockerContainer(groupConfig, server);
+                        if (containerId == null) {
+                            throw new RuntimeException("Failed to create Docker container for: " + server.getName());
+                        }
+
+                        this.serverContainerIds.put(server.getServerId(), containerId);
+                        this.dockerClient.startContainerCmd(containerId).exec();
+
+                        InspectContainerResponse containerInfo = this.dockerClient.inspectContainerCmd(containerId).exec();
+                        String ipAddress = this.getContainerIpAddress(containerInfo);
+
+                        int serverPort = 25565;
+                        if (this.isProxyServer(server.getGroup())) {
+                            ipAddress = this.cachedHostIp;
+                            Integer hostPort = this.serverIdToPort.get(server.getServerId());
+                            if (hostPort != null) {
+                                serverPort = hostPort;
+                            }
+                            Logger.debug("Batch: Using public IP and port for proxy server {}: {}:{}", server.getName(), ipAddress, serverPort);
+                        }
+
+                        ServerInfo serverInfo = ServerInfo.builder()
+                                .status(ServerStatus.STARTING)
+                                .onlinePlayers(0)
+                                .maxPlayers(server.getServerInfo() != null ? server.getServerInfo().getMaxPlayers() : 20)
+                                .onlinePlayerNames(new HashSet<>())
+                                .build();
+
+                        AtlasServer updatedServer = AtlasServer.builder()
+                                .serverId(server.getServerId())
+                                .name(server.getName())
+                                .identifier(server.getIdentifier())
+                                .group(server.getGroup())
+                                .workingDirectory(server.getWorkingDirectory())
+                                .address(ipAddress)
+                                .port(serverPort)
+                                .type(server.getType())
+                                .createdAt(server.getCreatedAt())
+                                .serviceProviderId(containerId)
+                                .isManuallyScaled(server.isManuallyScaled())
+                                .lastHeartbeat(System.currentTimeMillis())
+                                .serverInfo(serverInfo)
+                                .build();
+
+                        long serverCreationTime = System.currentTimeMillis() - serverStartTime;
+                        Logger.debug("Batch: Container created for {} in {}ms", server.getName(), serverCreationTime);
+
+                        return updatedServer;
+                    } catch (Exception e) {
+                        Logger.error("Batch: Failed to create server {}: {}", server.getName(), e.getMessage());
+                        throw new RuntimeException(e);
+                    }
+                }, this.batchCreationPool))
+                .toList();
+
+        return CompletableFuture.allOf(creationFutures.toArray(new CompletableFuture[0]))
+                .thenApply(v -> {
+                    List<AtlasServer> createdServers = creationFutures.stream()
+                            .map(CompletableFuture::join)
+                            .toList();
+
+                    long totalTime = System.currentTimeMillis() - startTime;
+                    CreationMetrics.recordBatchCreation(groupConfig.getDisplayName(), createdServers.size(), totalTime);
+
+                    return createdServers;
+                })
+                .exceptionally(throwable -> {
+                    long totalTime = System.currentTimeMillis() - startTime;
+                    Logger.error("Batch creation failed after {}ms", totalTime, throwable);
+                    CreationMetrics.recordServerCreation("batch_creation_failed", totalTime, false);
+                    return new ArrayList<>();
+                });
+    }
 
     @Override
     public CompletableFuture<Void> stopServer(AtlasServer atlasServer) {
@@ -1396,12 +1497,17 @@ public final class DockerServiceProvider extends ServiceProvider {
 
 
         this.executorService.shutdown();
+        this.batchCreationPool.shutdown();
         try {
             if (!this.executorService.awaitTermination(10, TimeUnit.SECONDS)) {
                 this.executorService.shutdownNow();
             }
+            if (!this.batchCreationPool.awaitTermination(10, TimeUnit.SECONDS)) {
+                this.batchCreationPool.shutdownNow();
+            }
         } catch (InterruptedException e) {
             this.executorService.shutdownNow();
+            this.batchCreationPool.shutdownNow();
             Thread.currentThread().interrupt();
         }
     }
@@ -1775,12 +1881,12 @@ public final class DockerServiceProvider extends ServiceProvider {
                     this.serverIdToPort.remove(serverId);
 
                     zombieServerIds.add(serverId);
-                    
+
                     if (server.getType() == ServerType.STATIC && !server.isShutdown()) {
                         Scaler zombieScaler = AtlasBase.getInstance().getScalerManager().getScaler(server.getGroup());
                         if (zombieScaler != null && !zombieScaler.getManuallyStopped().contains(serverId)) {
                             Logger.info("Attempting to recover zombie static server: {}", server.getName());
-                            
+
                             if (server.getServerInfo() != null) {
                                 ServerInfo stoppedInfo = ServerInfo.builder()
                                         .status(ServerStatus.STOPPED)
@@ -1790,7 +1896,7 @@ public final class DockerServiceProvider extends ServiceProvider {
                                         .build();
                                 server.updateServerInfo(stoppedInfo);
                             }
-                            
+
                             AtlasBase atlasBase = AtlasBase.getInstance();
                             ServerLifecycleService lifecycleService = new ServerLifecycleService(atlasBase);
                             lifecycleService.restartServer(server).exceptionally(throwable -> {
@@ -1946,13 +2052,25 @@ public final class DockerServiceProvider extends ServiceProvider {
         if (atlasBase != null) {
             boolean downloadOnStartup = atlasBase.getConfigManager().getAtlasConfig().getAtlas().getTemplates().isDownloadOnStartup();
 
-            if (downloadOnStartup && groupConfig.getTemplates() != null && !groupConfig.getTemplates().isEmpty()) {
+            if (downloadOnStartup) {
                 TemplateManager templateManager = new TemplateManager(
                         atlasBase.getConfigManager().getAtlasConfig().getAtlas().getTemplates(),
                         atlasBase.getConfigManager().getAtlasConfig().getAtlas().getS3()
                 );
+
+                List<String> templates = new ArrayList<>();
+
+                Optional.ofNullable(groupConfig.getTemplates())
+                        .filter(list -> !list.isEmpty())
+                        .ifPresent(templates::addAll);
+
+                Optional.ofNullable(groupConfig.getShuffledTemplates())
+                        .filter(list -> !list.isEmpty())
+                        .map(list -> list.get(ThreadLocalRandom.current().nextInt(list.size())))
+                        .ifPresent(templates::add);
+
                 boolean isStaticServer = server.getType() == ServerType.STATIC;
-                templateManager.applyTemplatesWithPluginCleanup(server.getWorkingDirectory(), groupConfig.getTemplates(), isStaticServer);
+                templateManager.applyTemplatesWithPluginCleanup(server.getWorkingDirectory(), templates, isStaticServer);
                 templateManager.close();
                 Logger.debug("Applied templates to server: {}", server.getName());
             } else {
@@ -2112,16 +2230,16 @@ public final class DockerServiceProvider extends ServiceProvider {
                     String errorMessage = e.getMessage();
                     if (errorMessage != null && (errorMessage.contains("404") || errorMessage.contains("No such container"))) {
                         Logger.warn("Container {} for server {} no longer exists - cleaning up", containerId.substring(0, 12), server.getName());
-                        
+
                         this.serverContainerIds.remove(server.getServerId());
-                        
+
                         if (server.getType() == ServerType.STATIC && !server.isShutdown()) {
                             AtlasBase atlasInstance = AtlasBase.getInstance();
                             if (atlasInstance != null && atlasInstance.getScalerManager() != null) {
                                 Scaler scaler = atlasInstance.getScalerManager().getScaler(server.getGroup());
                                 if (scaler != null && !scaler.getManuallyStopped().contains(server.getServerId())) {
                                     Logger.info("Static server {} container disappeared unexpectedly - initiating recovery", server.getName());
-                                    
+
                                     if (server.getServerInfo() != null) {
                                         ServerInfo stoppedInfo = ServerInfo.builder()
                                                 .status(ServerStatus.STOPPED)
@@ -2131,11 +2249,11 @@ public final class DockerServiceProvider extends ServiceProvider {
                                                 .build();
                                         server.updateServerInfo(stoppedInfo);
                                     }
-                                    
+
                                     if (AtlasBase.getInstance().getNettyServer() != null) {
                                         AtlasBase.getInstance().getNettyServer().broadcastServerUpdate(server);
                                     }
-                                    
+
                                     ServerLifecycleService lifecycleService = new ServerLifecycleService(AtlasBase.getInstance());
                                     lifecycleService.restartServer(server).exceptionally(throwable -> {
                                         Logger.error("Failed to recover static server {} after container disappeared: {}", server.getName(), throwable.getMessage());
@@ -2146,7 +2264,7 @@ public final class DockerServiceProvider extends ServiceProvider {
                         }
                         return;
                     }
-                    
+
                     Logger.error("Error checking container status for {}: {}", server.getName(), e.getMessage());
                     return;
                 }

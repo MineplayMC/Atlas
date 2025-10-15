@@ -1,5 +1,6 @@
 package be.esmay.atlas.spigot.network;
 
+import be.esmay.atlas.common.gate.packets.GateConnectPlayerPacket;
 import be.esmay.atlas.common.network.packet.Packet;
 import be.esmay.atlas.common.network.packet.PacketHandler;
 import be.esmay.atlas.common.network.packet.packets.AtlasServerUpdatePacket;
@@ -113,6 +114,10 @@ public final class SpigotPacketHandler extends SimpleChannelInboundHandler<Packe
 
     @Override
     public void handleServerListRequest(ServerListRequestPacket packet) {
+    }
+
+    @Override
+    public void handleGatePlayerConnect(GateConnectPlayerPacket packet) {
     }
 
     @Override

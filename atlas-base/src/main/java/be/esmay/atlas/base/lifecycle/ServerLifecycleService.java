@@ -5,7 +5,6 @@ import be.esmay.atlas.base.activity.ActivityType;
 import be.esmay.atlas.base.api.WebSocketManager;
 import be.esmay.atlas.base.api.dto.WebSocketMessage;
 import be.esmay.atlas.base.provider.DeletionOptions;
-import be.esmay.atlas.base.provider.DeletionReason;
 import be.esmay.atlas.base.provider.ServiceProvider;
 import be.esmay.atlas.base.provider.StartOptions;
 import be.esmay.atlas.base.scaler.Scaler;
@@ -16,7 +15,6 @@ import be.esmay.atlas.common.models.AtlasServer;
 import be.esmay.atlas.common.models.ServerInfo;
 
 import java.util.HashSet;
-
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -40,11 +38,11 @@ public final class ServerLifecycleService {
     public CompletableFuture<Void> startServer(AtlasServer server) {
         if (server.getServerInfo() != null) {
             ServerInfo startingInfo = ServerInfo.builder()
-                .status(ServerStatus.STARTING)
-                .onlinePlayers(0)
-                .maxPlayers(server.getServerInfo().getMaxPlayers())
-                .onlinePlayerNames(new HashSet<>())
-                .build();
+                    .status(ServerStatus.STARTING)
+                    .onlinePlayers(0)
+                    .maxPlayers(server.getServerInfo().getMaxPlayers())
+                    .onlinePlayerNames(new HashSet<>())
+                    .build();
             server.updateServerInfo(startingInfo);
         }
 
@@ -83,7 +81,7 @@ public final class ServerLifecycleService {
     /**
      * Stops a server with specific deletion options.
      *
-     * @param server The server to stop
+     * @param server  The server to stop
      * @param options The deletion options to use
      * @return CompletableFuture that completes when the server is stopped
      */
@@ -104,11 +102,11 @@ public final class ServerLifecycleService {
 
         if (server.getServerInfo() != null) {
             ServerInfo stoppingInfo = ServerInfo.builder()
-                .status(ServerStatus.STOPPING)
-                .onlinePlayers(server.getServerInfo().getOnlinePlayers())
-                .maxPlayers(server.getServerInfo().getMaxPlayers())
-                .onlinePlayerNames(server.getServerInfo().getOnlinePlayerNames())
-                .build();
+                    .status(ServerStatus.STOPPING)
+                    .onlinePlayers(server.getServerInfo().getOnlinePlayers())
+                    .maxPlayers(server.getServerInfo().getMaxPlayers())
+                    .onlinePlayerNames(server.getServerInfo().getOnlinePlayerNames())
+                    .build();
             server.updateServerInfo(stoppingInfo);
         }
 
@@ -122,7 +120,7 @@ public final class ServerLifecycleService {
                     if (this.atlasBase.getNettyServer() != null) {
                         this.atlasBase.getNettyServer().broadcastServerRemove(server.getServerId(), "Static server manually stopped");
                     }
-                    
+
                     server.setShutdown(false);
                 })
                 .exceptionally(throwable -> {
@@ -162,11 +160,11 @@ public final class ServerLifecycleService {
 
         if (server.getServerInfo() != null) {
             ServerInfo stoppingInfo = ServerInfo.builder()
-                .status(ServerStatus.STOPPING)
-                .onlinePlayers(server.getServerInfo().getOnlinePlayers())
-                .maxPlayers(server.getServerInfo().getMaxPlayers())
-                .onlinePlayerNames(server.getServerInfo().getOnlinePlayerNames())
-                .build();
+                    .status(ServerStatus.STOPPING)
+                    .onlinePlayers(server.getServerInfo().getOnlinePlayers())
+                    .maxPlayers(server.getServerInfo().getMaxPlayers())
+                    .onlinePlayerNames(server.getServerInfo().getOnlinePlayerNames())
+                    .build();
             server.updateServerInfo(stoppingInfo);
 
             if (this.atlasBase.getNettyServer() != null) {
@@ -233,21 +231,21 @@ public final class ServerLifecycleService {
         } else {
             stopFuture = this.stopServer(server, DeletionOptions.serverRestart());
         }
-        
-        return stopFuture.thenCompose(v -> {
-            Logger.debug("Server stopped, now restarting: {}", server.getName());
 
-            if (server.getServerInfo() != null) {
-                ServerInfo startingInfo = ServerInfo.builder()
-                    .status(ServerStatus.STARTING)
-                    .onlinePlayers(0)
-                    .maxPlayers(server.getServerInfo().getMaxPlayers())
-                    .onlinePlayerNames(new HashSet<>())
-                    .build();
-                server.updateServerInfo(startingInfo);
-            }
-            
-            return provider.startServerCompletely(server, StartOptions.restart());
+        return stopFuture.thenCompose(v -> {
+                    Logger.debug("Server stopped, now restarting: {}", server.getName());
+
+                    if (server.getServerInfo() != null) {
+                        ServerInfo startingInfo = ServerInfo.builder()
+                                .status(ServerStatus.STARTING)
+                                .onlinePlayers(0)
+                                .maxPlayers(server.getServerInfo().getMaxPlayers())
+                                .onlinePlayerNames(new HashSet<>())
+                                .build();
+                        server.updateServerInfo(startingInfo);
+                    }
+
+                    return provider.startServerCompletely(server, StartOptions.restart());
                 })
                 .thenAccept(restartedServer -> {
                     Logger.debug("Successfully restarted server: " + restartedServer.getName());
@@ -256,11 +254,11 @@ public final class ServerLifecycleService {
 
                     if (this.atlasBase.getActivityService() != null) {
                         this.atlasBase.getActivityService().recordActivity(
-                            ActivityType.SERVER_RESTART,
-                            server.getServerId(),
-                            server.getGroup(),
-                            "manual",
-                            String.format("Server %s restarted successfully", server.getName())
+                                ActivityType.SERVER_RESTART,
+                                server.getServerId(),
+                                server.getGroup(),
+                                "manual",
+                                String.format("Server %s restarted successfully", server.getName())
                         );
                     }
 
@@ -273,7 +271,7 @@ public final class ServerLifecycleService {
                     Logger.error("Failed to restart server: " + server.getName(), throwable);
 
                     scaler.clearRestartFlag(server.getServerId());
-                    
+
                     return null;
                 });
     }

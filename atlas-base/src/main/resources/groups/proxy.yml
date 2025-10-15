@@ -20,6 +20,8 @@ group:
   templates:
     - "global/proxy"
 
+  shuffled-templates: []
+
   service-provider:
     docker:
       image: "itzg/mc-proxy:latest"
