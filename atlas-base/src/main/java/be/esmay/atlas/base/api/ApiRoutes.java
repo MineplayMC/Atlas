@@ -126,6 +126,7 @@ public final class ApiRoutes {
         this.router.post("/api/v1/servers/:id/stop").handler(this::stopServer);
         this.router.post("/api/v1/servers/:id/restart").handler(this::restartServer);
         this.router.post("/api/v1/servers/:id/command").handler(this::executeServerCommand);
+        this.router.post("/api/v1/servers/:id/metadata").handler(this::executeMetadataUpdate);
         this.router.post("/api/v1/servers/:id/ws/token").handler(this::generateWebSocketToken);
         this.router.delete("/api/v1/servers/:id").handler(this::removeServer);
         this.router.post("/api/v1/groups/:group/scale").handler(this::scaleGroup);
@@ -475,6 +476,35 @@ public final class ApiRoutes {
                 .thenRun(() -> this.sendResponse(context, ApiResponse.success(null, "Command executed successfully")))
                 .exceptionally(throwable -> {
                     this.sendError(context, "Failed to execute command: " + throwable.getMessage());
+                    return null;
+                });
+    }
+
+    private void executeMetadataUpdate(RoutingContext context) {
+        String serverId = context.pathParam("id");
+        JsonObject body = context.body().asJsonObject();
+
+        if (body == null || !body.containsKey("key")) {
+            this.sendError(context, "Missing required field: key", 400);
+            return;
+        }
+
+        if (!body.containsKey("value")) {
+            this.sendError(context, "Missing required field: value", 400);
+            return;
+        }
+
+        String key = body.getString("key");
+        String value = body.getString("value");
+        if (key == null || key.trim().isEmpty()) {
+            this.sendError(context, "Key cannot be empty", 400);
+            return;
+        }
+
+        AtlasBase.getInstance().getServerManager().sendMetadata(serverId, key, value)
+                .thenRun(() -> this.sendResponse(context, ApiResponse.success(null, "Metadata update executed successfully")))
+                .exceptionally(throwable -> {
+                    this.sendError(context, "Failed to execute metadata update: " + throwable.getMessage());
                     return null;
                 });
     }

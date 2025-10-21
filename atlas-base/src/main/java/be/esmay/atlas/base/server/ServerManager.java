@@ -6,6 +6,7 @@ import be.esmay.atlas.base.network.connection.ConnectionManager;
 import be.esmay.atlas.base.provider.ServiceProvider;
 import be.esmay.atlas.base.utils.Logger;
 import be.esmay.atlas.common.models.AtlasServer;
+import be.esmay.atlas.common.network.packet.packets.MetadataUpdatePacket;
 import be.esmay.atlas.common.network.packet.packets.ServerCommandPacket;
 
 import java.util.concurrent.CompletableFuture;
@@ -53,6 +54,25 @@ public final class ServerManager {
         })));
     }
 
+    public CompletableFuture<Void> sendMetadata(String serverIdentifier, String key, String value) {
+        ServiceProvider provider = AtlasBase.getInstance().getProviderManager().getProvider();
+
+        return provider.getServer(serverIdentifier).thenCompose(serverOpt -> serverOpt.map(atlasServer -> this.executeMetadata(atlasServer, key, value)).orElseGet(() -> provider.getAllServers().thenCompose(servers -> {
+            AtlasServer server = servers.stream()
+                    .filter(s -> s.getName().equals(serverIdentifier))
+                    .findFirst()
+                    .orElse(null);
+
+            if (server == null) {
+                CompletableFuture<Void> failedFuture = new CompletableFuture<>();
+                failedFuture.completeExceptionally(new IllegalArgumentException("Server not found: " + serverIdentifier));
+                return failedFuture;
+            }
+
+            return this.executeMetadata(server, key, value);
+        })));
+    }
+
     private CompletableFuture<Void> executeCommand(AtlasServer server, String command) {
         if (server.getServerInfo() == null || !server.getServerInfo().getStatus().toString().equals("RUNNING")) {
             CompletableFuture<Void> failedFuture = new CompletableFuture<>();
@@ -71,4 +91,21 @@ public final class ServerManager {
 
         return CompletableFuture.completedFuture(null);
     }
+
+    private CompletableFuture<Void> executeMetadata(AtlasServer server, String key, String value) {
+        if (server.getServerInfo() == null || !server.getServerInfo().getStatus().toString().equals("RUNNING")) {
+            CompletableFuture<Void> failedFuture = new CompletableFuture<>();
+            failedFuture.completeExceptionally(new IllegalStateException(
+                    "Server " + server.getName() + " is not running (Status: " +
+                            (server.getServerInfo() != null ? server.getServerInfo().getStatus() : "UNKNOWN") + ")"
+            ));
+            return failedFuture;
+        }
+
+        server.setMetadata(key, value);
+        Logger.info("Metadata sent to server " + server.getName() + ": " + key + " = " + value);
+
+        return CompletableFuture.completedFuture(null);
+    }
+
 }

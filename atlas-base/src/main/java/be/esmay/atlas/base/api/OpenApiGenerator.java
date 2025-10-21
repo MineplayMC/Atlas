@@ -23,6 +23,7 @@ import io.swagger.v3.oas.models.security.SecurityScheme;
 import io.swagger.v3.oas.models.servers.Server;
 
 import java.math.BigDecimal;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -84,6 +85,7 @@ public final class OpenApiGenerator {
         paths.addPathItem("/api/v1/servers/{id}/start", createServerActionPath("start"));
         paths.addPathItem("/api/v1/servers/{id}/stop", createServerActionPath("stop"));
         paths.addPathItem("/api/v1/servers/{id}/command", createServerCommandPath());
+        paths.addPathItem("/api/v1/servers/{id}/metadata", createMetadataUpdatePath());
         paths.addPathItem("/api/v1/servers/{id}/ws/token", createWebSocketTokenPath());
         paths.addPathItem("/api/v1/groups", createGroupsPath());
         paths.addPathItem("/api/v1/groups/{name}", createGroupByNamePath());
@@ -763,6 +765,47 @@ public final class OpenApiGenerator {
                         .description("Invalid request - missing or empty command"))
                     .addApiResponse("404", new ApiResponse()
                         .description("Server not found"))));
+    }
+
+    private static PathItem createMetadataUpdatePath() {
+        Parameter serverIdParam = new Parameter()
+                .name("id")
+                .in("path")
+                .description("Server ID")
+                .required(true)
+                .style(Parameter.StyleEnum.SIMPLE)
+                .explode(false)
+                .schema(new StringSchema());
+
+        RequestBody requestBody = new RequestBody()
+                .description("Metadata update to execute")
+                .required(true)
+                .content(new Content()
+                        .addMediaType("application/json", new MediaType()
+                                .schema(new Schema<>()
+                                        .type("object")
+                                        .addProperties("key", new StringSchema().description("Metadata key"))
+                                        .addProperties("value", new StringSchema().description("Metadata value"))
+                                        .required(Arrays.asList("key", "value")))));
+
+        return new PathItem()
+                .post(new Operation()
+                        .operationId("updateServerMetadata")
+                        .summary("Update server metadata")
+                        .description("Updates a metadata entry on the specified server")
+                        .addTagsItem("Servers")
+                        .addParametersItem(serverIdParam)
+                        .requestBody(requestBody)
+                        .responses(createStandardResponses()
+                                .addApiResponse("200", new ApiResponse()
+                                        .description("Metadata updated successfully")
+                                        .content(new Content()
+                                                .addMediaType("application/json", new MediaType()
+                                                        .schema(new Schema<>().$ref("#/components/schemas/ApiResponse")))))
+                                .addApiResponse("400", new ApiResponse()
+                                        .description("Invalid request - missing key or value"))
+                                .addApiResponse("404", new ApiResponse()
+                                        .description("Server not found"))));
     }
 
     private static PathItem createGroupsPath() {

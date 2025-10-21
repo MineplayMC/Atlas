@@ -72,11 +72,11 @@ subprojects {
                 }
             }
             publications {
-                create<MavenPublication>("maven") {
+                named<MavenPublication>("maven") {
                     groupId = "be.esmay"
                     artifactId = project.name
                     version = version
-                    from(components["java"])
+                    //from(components["java"])
                 }
             }
         }
