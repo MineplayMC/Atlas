@@ -17,13 +17,13 @@ services:
       - /root/atlas/cache:/root/atlas/cache
       - /root/atlas/logs:/root/atlas/logs
     networks:
-      atlas:
+      mineplay-network:
         aliases:
           - atlas-server
 
 
 networks:
-  atlas:
-    name: atlas
+  mineplay-network:
+    name: mineplay-network
     external: true
     driver: bridge
