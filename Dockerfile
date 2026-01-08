@@ -1,7 +1,7 @@
 # Dockerfile
 
 # Use a lightweight Java 21 base image
-FROM arm64v8/amazoncorretto:21
+FROM eclipse-temurin:21-jre
 
 # Set the working directory inside the container
 WORKDIR /root/atlas
